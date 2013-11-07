@@ -194,8 +194,8 @@ QlessAPI['queue.forget'] = function(now, ...)
 end
 
 -- Resource apis
-QlessAPI['resource.set'] = function(now, rid, count)
-  return Qless.resource(rid):set(count)
+QlessAPI['resource.set'] = function(now, rid, max)
+  return Qless.resource(rid):set(max)
 end
 
 QlessAPI['resource.get'] = function(now, rid)

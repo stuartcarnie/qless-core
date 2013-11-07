@@ -10,7 +10,7 @@
 -- appropriate properties
 function QlessResource:data(...)
   local res = redis.call(
-      'hmget', QlessResource.ns .. self.rid, 'rid', 'count')
+      'hmget', QlessResource.ns .. self.rid, 'rid', 'max')
 
   -- Return nil if we haven't found it
   if not res[1] then
@@ -19,7 +19,7 @@ function QlessResource:data(...)
 
   local data = {
     rid          = res[1],
-    count        = tonumber(res[2] or 0),
+    max          = tonumber(res[2] or 0),
     pending      = redis.call('zrevrange', self:prefix('pending'), 0, -1),
     locks        = redis.call('smembers', self:prefix('locks')),
   }
@@ -27,10 +27,10 @@ function QlessResource:data(...)
   return data
 end
 
-function QlessResource:set(count)
-  count = assert(tonumber(count), 'Set(): Arg "count" not a number: ' .. tostring(count))
+function QlessResource:set(max)
+  local max = assert(tonumber(max), 'Set(): Arg "max" not a number: ' .. tostring(max))
 
-  redis.call('hmset', QlessResource.ns .. self.rid, 'rid', self.rid, 'count', count);
+  redis.call('hmset', QlessResource.ns .. self.rid, 'rid', self.rid, 'max', max);
 
   return self.rid
 end
@@ -53,7 +53,7 @@ function QlessResource:acquire(now, priority, jid)
   assert(data, 'Acquire(): resource ' .. self.rid .. ' does not exist')
   assert(type(jid) ~= 'table', 'Acquire(): invalid jid')
 
-  local remaining = data['count'] - redis.pcall('scard', keyLocks)
+  local remaining = data['max'] - redis.pcall('scard', keyLocks)
 
   if remaining > 0 then
     -- acquire a lock and release it from the pending queue

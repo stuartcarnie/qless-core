@@ -25,7 +25,7 @@ class TestResources(TestQless):
         res = self.lua('resource.get', 0, 'test')
 
         self.assertEquals(res['rid'], 'test')
-        self.assertEquals(res['count'], 5)
+        self.assertEquals(res['max'], 5)
 
     def test_unset(self):
         self.lua('resource.set', 0, 'test', 5)
