@@ -132,6 +132,66 @@ class TestJobs(TestQless):
         self.assertEqual(
             self.lua('jobs', 100, 'running', 'queue', 50, 50), jids[50:])
 
+    def test_scheduled_does_not_acquire_resources(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 1, 'resources', ['r-1'])
+        scheduled = self.lua('jobs', 0, 'scheduled', 'queue')
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+    def test_scheduled_acquires_resources_when_popped(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 1, 'resources', ['r-1'])
+        scheduled = self.lua('jobs', 0, 'scheduled', 'queue')
+
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1'])
+        self.assertEqual(res['pending'], {})
+
+    def test_scheduled_adds_pending_if_resources_not_available(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 1, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], {})
+
+        # will trigger scheduled job also, but will not pop
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], ['jid-1'])
+
+    def test_scheduled_with_pending_does_pop_when_resources_are_available(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 1, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], {})
+
+        # will trigger scheduled job also, but will not pop
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], ['jid-1'])
+
+        self.lua('complete', 3, 'jid-2', 'worker-1', 'queue', {})
+
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEqual(len(jobs), 1)
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1'])
+        self.assertEqual(res['pending'], {})
+
 
 class TestQueue(TestQless):
     '''Test queue info tests'''
@@ -323,6 +383,7 @@ class TestPut(TestQless):
             'state': 'waiting',
             'tags': {},
             'tracked': False,
+            'resources': {},
             'worker': u''
         })
 
@@ -395,6 +456,7 @@ class TestPut(TestQless):
             'state': 'waiting',
             'tags': {},
             'tracked': False,
+            'resources': {},
             'worker': u''})
 
     def test_move_update(self):
@@ -426,6 +488,32 @@ class TestPut(TestQless):
         self.assertEqual(self.lua('get', 0, 'a')['dependents'], {})
         self.assertEqual(self.lua('get', 0, 'b')['dependents'], ['c'])
         self.assertEqual(self.lua('get', 0, 'c')['dependencies'], ['b'])
+
+    def test_resources(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEquals(len(res), 1)
+        job = res[0]
+        self.assertEquals(job['jid'], 'jid-1')
+
+        res = self.lua('pop', 1, 'queue', 'worker-2', 1)
+        self.assertEquals(len(res), 0)
+
+        res = self.lua('complete', 10, job['jid'], 'worker-1', 'queue', {})
+        self.assertEquals(res, 'complete')
+
+        res = self.lua('pop', 1, 'queue', 'worker-2', 1)
+        self.assertEquals(len(res), 1)
+        job = res[0]
+        self.assertEquals(job['jid'], 'jid-2')
+
+        res = self.lua('complete', 10, job['jid'], 'worker-2', 'queue', {})
+        self.assertEquals(res, 'complete')
+
+
 
 
 class TestPeek(TestQless):
@@ -463,6 +551,7 @@ class TestPeek(TestQless):
             'state': 'waiting',
             'tags': {},
             'tracked': False,
+            'resources': {},
             'worker': u''
         }])
         # With several jobs in the queue, we should be able to see more
@@ -511,6 +600,24 @@ class TestPeek(TestQless):
         self.assertEqual(['a', 'b'],
             [j['jid'] for j in self.lua('peek', 0, 'queue', 100)])
 
+    def test_can_queue_and_peek_multiples(self):
+        self.lua('resource.set', 0, 'r-1', 2)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('peek', 99, 'queue', 5)
+        self.assertEqual(len(res), 2)
+
+    def test_can_peek_returns_correct_number_for_limited_resource(self):
+        self.lua('resource.set', 0, 'r-1', 2)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-3', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('peek', 99, 'queue', 5)
+        self.assertEqual(len(res), 2)
+
+
 
 class TestPop(TestQless):
     '''Test popping jobs'''
@@ -549,6 +656,7 @@ class TestPop(TestQless):
             'state': 'running',
             'tags': {},
             'tracked': False,
+            'resources': {},
             'worker': 'worker'}])
 
     def test_pop_many(self):
@@ -637,3 +745,73 @@ class TestPop(TestQless):
         self.lua('fail', 3, 'a', 'worker', 'group', 'message', {})
         job = self.lua('pop', 4, 'queue', 'worker', 10)[0]
         self.assertEqual(job['jid'], 'b')
+
+
+class TestResources(TestQless):
+    """Queues should correctly handle jobs that require resources"""
+
+    def test_single_resource_does_not_pop_when_in_use(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEquals(len(res), 1)
+        job = res[0]
+        self.assertEquals(job['jid'], 'jid-1')
+
+        res = self.lua('pop', 1, 'queue', 'worker-2', 1)
+        self.assertEquals(len(res), 0)
+
+        res = self.lua('complete', 10, job['jid'], 'worker-1', 'queue', {})
+        self.assertEquals(res, 'complete')
+
+        res = self.lua('pop', 1, 'queue', 'worker-2', 1)
+        self.assertEquals(len(res), 1)
+        job = res[0]
+        self.assertEquals(job['jid'], 'jid-2')
+
+        res = self.lua('complete', 10, job['jid'], 'worker-2', 'queue', {})
+        self.assertEquals(res, 'complete')
+
+    def test_recurring_job_can_consume_resources(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+
+        res = self.lua('recur', 0, 'queue', 'jid-1', 'klass', {}, 'interval', 60, 0, 'resources', ['r-1'])
+
+        res = self.lua('pop', 15, 'queue', 'worker-1', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1-1'])
+        self.assertEqual(res['pending'], {})
+
+    def test_recurring_job_waits_for_resources(self):
+        """Job recurs, waits for resource to become available"""
+
+        self.lua('resource.set', 0, 'r-1', 1)
+
+        res = self.lua('recur', 0, 'queue', 'jid-1', 'klass', {}, 'interval', 60, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('pop', 15, 'queue', 'worker-1', 5)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], ['jid-1-1'])
+
+    def test_higher_priority_job_acquires_resource_first(self):
+        """Jobs with higher priority received resource lock before lower priority"""
+
+        self.lua('resource.set', 0, 'r-1', 1)
+
+        self.lua('put', 10, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+
+        self.lua('put', 15, None, 'queue', 'jid-low', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 15, None, 'queue', 'jid-high', 'klass', {}, 0, 'resources', ['r-1'], 'priority', 5)
+
+        res = self.lua('pop', 16, 'queue', 'worker-1', 1)
+        self.lua('complete', 17, 'jid-1', 'worker-1', 'queue', {})
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-high'])
+        self.assertEqual(res['pending'], ['jid-low'])

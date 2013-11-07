@@ -134,6 +134,7 @@ class TestComplete(TestQless):
             'state': 'complete',
             'tags': {},
             'tracked': False,
+            'resources': {},
             'worker': u''})
 
     def test_advance(self):
@@ -174,6 +175,40 @@ class TestComplete(TestQless):
             self.lua('complete', 2, jid, 'worker', 'queue', {})
         existing = [self.lua('get', 3, jid) for jid in range(10)]
         self.assertEqual([i for i in existing if i], [])
+
+    def test_complete_releases_resources(self):
+        """Can cancel running jobs, prevents heartbeats"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        self.lua('complete', 3, 'jid', 'worker', 'queue', {})
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+
+    def test_complete_releases_resources_for_next_job(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 10)
+        self.assertEqual(len(jobs), 1)
+
+        # can't pop next job, as resources are not available
+        jobs = self.lua('pop', 1, 'queue', 'worker-2', 10)
+        self.assertEqual(jobs, {})
+
+        self.lua('complete', 3, 'jid-1', 'worker-1', 'queue', {})
+
+        # job can now be popped as resource is available
+        jobs = self.lua('pop', 1, 'queue', 'worker-2', 10)
+        self.assertEqual(len(jobs), 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], {})
+
 
 
 class TestCancel(TestQless):
@@ -244,3 +279,116 @@ class TestCancel(TestQless):
         self.lua('pop', 2, 'queue', 'worker', 10)
         self.lua('cancel', 3, 'jid')
         self.assertEqual(self.lua('get', 4, 'jid'), None)
+
+    def test_cancel_waiting_releases_acquired_resources(self):
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid'])
+
+        self.lua('cancel', 3, 'jid')
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+
+    def test_cancel_waiting_releases_pending_resources(self):
+        """Can cancel a job waiting on resources and it will release pending resources"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, 'worker', 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1'])
+        self.assertEqual(res['pending'], ['jid-2'])
+
+        self.lua('cancel', 3, 'jid-2')
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1'])
+        self.assertEqual(res['pending'], {})
+
+    def test_cancel_running_releases_resources(self):
+        """Can cancel running jobs, releases acquired resources"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        self.lua('heartbeat', 2, 'jid', 'worker', {})
+        self.lua('cancel', 3, 'jid')
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+    def test_failed_releases_resources(self):
+        """Can fail job, releases acquired resources"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('pop', 0, 'queue', 'worker', 10)
+        self.lua('fail', 1, 'jid', 'worker', 'group', 'message', {})
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+
+class TestJobsWithResources(TestQless):
+    """Tests jobs which require resources"""
+
+    def test_exhausted_retry_releases_resources(self):
+        """Job exhausts retries, releases acquired resources"""
+
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, 'worker', 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-1'])
+        self.assertEqual(res['pending'], {})
+
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        self.assertEqual(self.lua('get', 2, 'jid-1')['state'], 'running')
+
+        self.lua('retry', 3, 'jid-1', 'queue', 'worker')
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+    def test_expired_releases_resources(self):
+        """Job times out, releases acquired resources"""
+
+        self.lua('config.set', 0, 'heartbeat', 10)
+        self.lua('config.set', 0, 'grace-period', 0)
+
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
+
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        jobs = self.lua('pop', 22, 'queue', 'worker-2', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], {})
+        self.assertEqual(res['pending'], {})
+
+    def test_expired_releases_resources_to_next_job(self):
+        """Job times out, releases acquired resources and assigns to next job"""
+
+        self.lua('config.set', 0, 'heartbeat', 10)
+        self.lua('config.set', 0, 'grace-period', 0)
+
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
+
+        jobs = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        jobs = self.lua('pop', 22, 'queue', 'worker-2', 1)
+
+        res = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res['locks'], ['jid-2'])
+        self.assertEqual(res['pending'], {})
+
+    def test_error_if_attempts_to_acquire_nonexistent_resource(self):
+        """Job requires invalid resource, generates error"""
+
+        self.assertRaisesRegexp(redis.ResponseError, r'resource r-1 does not exist',
+            self.lua, 'put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
+

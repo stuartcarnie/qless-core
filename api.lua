@@ -193,6 +193,27 @@ QlessAPI['queue.forget'] = function(now, ...)
   QlessQueue.deregister(unpack(arg))
 end
 
+-- Resource apis
+QlessAPI['resource.set'] = function(now, rid, count)
+  return Qless.resource(rid):set(count)
+end
+
+QlessAPI['resource.get'] = function(now, rid)
+  local data = Qless.resource(rid):data()
+  if not data then
+    return nil
+  end
+  return cjson.encode(data)
+end
+
+QlessAPI['resource.unset'] = function(now, rid)
+  return Qless.resource(rid):unset()
+end
+
+QlessAPI['resource.locks'] = function(now, rid)
+  return Qless.resource(rid):locks()
+end
+
 -------------------------------------------------------------------------------
 -- Function lookup
 -------------------------------------------------------------------------------

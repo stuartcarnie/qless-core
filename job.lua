@@ -11,7 +11,7 @@ function QlessJob:data(...)
   local job = redis.call(
       'hmget', QlessJob.ns .. self.jid, 'jid', 'klass', 'state', 'queue',
       'worker', 'priority', 'expires', 'retries', 'remaining', 'data',
-      'tags', 'failure')
+      'tags', 'failure', 'resources')
 
   -- Return nil if we haven't found it
   if not job[1] then
@@ -34,6 +34,7 @@ function QlessJob:data(...)
     tags         = cjson.decode(job[11]),
     history      = self:history(),
     failure      = cjson.decode(job[12] or '{}'),
+    resources    = cjson.decode(job[13] or '[]'),
     dependents   = redis.call(
       'smembers', QlessJob.ns .. self.jid .. '-dependents'),
     dependencies = redis.call(
@@ -127,6 +128,8 @@ function QlessJob:complete(now, worker, queue, data, ...)
   queue_obj.locks.remove(self.jid)
   queue_obj.scheduled.remove(self.jid)
 
+  self:release_resources(now)
+
   ----------------------------------------------------------
   -- This is the massive stats update that we have to do
   ----------------------------------------------------------
@@ -201,7 +204,9 @@ function QlessJob:complete(now, worker, queue, data, ...)
         end
         return 'depends'
       else
-        queue_obj.work.add(now, priority, self.jid)
+        if self:acquire_resources(now) then
+          queue_obj.work.add(now, priority, self.jid)
+        end
         return 'waiting'
       end
     end
@@ -279,7 +284,9 @@ function QlessJob:complete(now, worker, queue, data, ...)
             redis.call('hset', QlessJob.ns .. j, 'state', 'scheduled')
             redis.call('hdel', QlessJob.ns .. j, 'scheduled')
           else
-            queue.work.add(now, p, j)
+            if Qless.job(j):acquire_resources(now) then
+              queue.work.add(now, p, j)
+            end
             redis.call('hset', QlessJob.ns .. j, 'state', 'waiting')
           end
         end
@@ -377,6 +384,9 @@ function QlessJob:fail(now, worker, group, message, data)
   queue_obj.locks.remove(self.jid)
   queue_obj.scheduled.remove(self.jid)
 
+  -- release any resource locks the job might have
+  self:release_resources(now)
+
   -- The reason that this appears here is that the above will fail if the 
   -- job doesn't exist
   if data then
@@ -451,6 +461,7 @@ function QlessJob:retry(now, queue, worker, delay, group, message)
 
   -- Remove it from the locks key of the old queue
   Qless.queue(oldqueue).locks.remove(self.jid)
+  self:release_resources(now)
 
   -- Remove this job from the worker that was previously working it
   redis.call('zrem', 'ql:w:' .. worker .. ':jobs', self.jid)
@@ -500,7 +511,9 @@ function QlessJob:retry(now, queue, worker, delay, group, message)
       queue_obj.scheduled.add(now + delay, self.jid)
       redis.call('hset', QlessJob.ns .. self.jid, 'state', 'scheduled')
     else
-      queue_obj.work.add(now, priority, self.jid)
+      if self:acquire_resources(now) then
+        queue_obj.work.add(now, priority, self.jid)
+      end
       redis.call('hset', QlessJob.ns .. self.jid, 'state', 'waiting')
     end
 
@@ -564,7 +577,9 @@ function QlessJob:depends(now, command, ...)
       if q then
         local queue_obj = Qless.queue(q)
         queue_obj.depends.remove(self.jid)
-        queue_obj.work.add(now, p, self.jid)
+        if self:acquire_resources(now) then
+          queue_obj.work.add(now, p, self.jid)
+        end
         redis.call('hset', QlessJob.ns .. self.jid, 'state', 'waiting')
       end
     else
@@ -579,7 +594,9 @@ function QlessJob:depends(now, command, ...)
           if q then
             local queue_obj = Qless.queue(q)
             queue_obj.depends.remove(self.jid)
-            queue_obj.work.add(now, p, self.jid)
+            if self:acquire_resources(now) then
+              queue_obj.work.add(now, p, self.jid)
+            end
             redis.call('hset',
               QlessJob.ns .. self.jid, 'state', 'waiting')
           end
@@ -785,4 +802,26 @@ function QlessJob:history(now, what, item)
     return redis.call('rpush', QlessJob.ns .. self.jid .. '-history',
       cjson.encode({math.floor(now), what, item}))
   end
+end
+
+function QlessJob:release_resources()
+  local resources = redis.call('hget', QlessJob.ns .. self.jid, 'resources')
+  resources = cjson.decode(resources or '[]')
+  for _, res in ipairs(resources) do
+    Qless.resource(res):release(self.jid)
+  end
+end
+
+function QlessJob:acquire_resources(now)
+  local resources, priority = unpack(redis.call('hmget', QlessJob.ns .. self.jid, 'resources', 'priority'))
+  resources = cjson.decode(resources or '[]')
+  if (#resources == 0) then
+    return true
+  end
+
+  local acquired_all = true
+  for _, res in ipairs(resources) do
+    acquired_all = acquired_all and Qless.resource(res):acquire(now, priority, self.jid)
+  end
+  return acquired_all
 end

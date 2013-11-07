@@ -27,6 +27,12 @@ QlessJob.__index = QlessJob
 local QlessRecurringJob = {}
 QlessRecurringJob.__index = QlessRecurringJob
 
+-- Resource forward declaration
+local QlessResource = {
+    ns = Qless.ns .. 'r:'
+}
+QlessResource.__index = QlessResource;
+
 -- Config forward declaration
 Qless.config = {}
 
@@ -59,6 +65,15 @@ function Qless.recurring(jid)
   setmetatable(job, QlessRecurringJob)
   job.jid = jid
   return job
+end
+
+-- Return a resource object
+function Qless.resource(rid)
+  assert(rid, 'Resource(): no rid provided')
+  local res = {}
+  setmetatable(res, QlessResource)
+  res.rid = rid
+  return res
 end
 
 -- Failed([group, [start, [limit]]])
@@ -372,6 +387,8 @@ function Qless.cancel(...)
         queue.scheduled.remove(jid)
         queue.depends.remove(jid)
       end
+
+      Qless.job(jid):release_resources()
 
       -- We should probably go through all our dependencies and remove
       -- ourselves from the list of dependents

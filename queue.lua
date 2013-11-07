@@ -446,6 +446,9 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
   local depends = assert(cjson.decode(options['depends'] or '[]') ,
     'Put(): Arg "depends" not JSON: '     .. tostring(options['depends']))
 
+  local resources = assert(cjson.decode(options['resources'] or '[]'),
+    'Put(): Arg "resources" not JSON array: '     .. tostring(options['resources']))
+
   -- If the job has old dependencies, determine which dependencies are
   -- in the new dependencies but not in the old ones, and which are in the
   -- old ones but not in the new
@@ -538,6 +541,7 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
     'data'     , raw_data,
     'priority' , priority,
     'tags'     , cjson.encode(tags),
+    'resources', cjson.encode(resources),
     'state'    , ((delay > 0) and 'scheduled') or 'waiting',
     'worker'   , '',
     'expires'  , 0,
@@ -574,6 +578,10 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
     if redis.call('scard', QlessJob.ns .. jid .. '-dependencies') > 0 then
       self.depends.add(now, jid)
       redis.call('hset', QlessJob.ns .. jid, 'state', 'depends')
+    elseif #resources > 0 then
+      if Qless.job(jid):acquire_resources(now) then
+        self.work.add(now, priority, jid)
+      end
     else
       self.work.add(now, priority, jid)
     end
@@ -614,7 +622,14 @@ function QlessQueue:unfail(now, group, count)
       'expires'  , 0,
       'queue'    , self.name,
       'remaining', data.retries or 5)
-    self.work.add(now, data.priority, data.jid)
+
+    if #data['resources'] then
+      if job:acquire_resources(now) then
+        self.work.add(now, data.priority, data.jid)
+      end
+    else
+      self.work.add(now, data.priority, data.jid)
+    end
   end
 
   -- Remove these jobs from the failed state
@@ -666,6 +681,8 @@ function QlessQueue:recur(now, jid, klass, raw_data, spec, ...)
     options.backlog = assert(tonumber(options.backlog  or 0),
       'Recur(): Arg "backlog" not a number: ' .. tostring(
         options.backlog))
+    options.resources = assert(cjson.decode(options['resources'] or '[]'),
+      'Recur(): Arg "resources" not JSON array: '     .. tostring(options['resources']))
 
     local count, old_queue = unpack(redis.call('hmget', 'ql:r:' .. jid, 'count', 'queue'))
     count = count or 0
@@ -678,19 +695,20 @@ function QlessQueue:recur(now, jid, klass, raw_data, spec, ...)
     
     -- Do some insertions
     redis.call('hmset', 'ql:r:' .. jid,
-      'jid'     , jid,
-      'klass'   , klass,
-      'data'    , raw_data,
-      'priority', options.priority,
-      'tags'    , cjson.encode(options.tags or {}),
-      'state'   , 'recur',
-      'queue'   , self.name,
-      'type'    , 'interval',
+      'jid'      , jid,
+      'klass'    , klass,
+      'data'     , raw_data,
+      'priority' , options.priority,
+      'tags'     , cjson.encode(options.tags or {}),
+      'state'    , 'recur',
+      'queue'    , self.name,
+      'type'     , 'interval',
       -- How many jobs we've spawned from this
-      'count'   , count,
-      'interval', interval,
-      'retries' , options.retries,
-      'backlog' , options.backlog)
+      'count'    , count,
+      'interval' , interval,
+      'retries'  , options.retries,
+      'backlog'  , options.backlog,
+      'resources', cjson.encode(options.resources))
     -- Now, we should schedule the next run of the job
     self.recurring.add(now + offset, jid)
     
@@ -726,10 +744,11 @@ function QlessQueue:check_recurring(now, count)
     -- get the last time each of them was run, and then increment
     -- it by its interval. While this time is less than now,
     -- we need to keep putting jobs on the queue
-    local klass, data, priority, tags, retries, interval, backlog = unpack(
+    local klass, data, priority, tags, retries, interval, backlog, resources = unpack(
       redis.call('hmget', 'ql:r:' .. jid, 'klass', 'data', 'priority',
-        'tags', 'retries', 'interval', 'backlog'))
+        'tags', 'retries', 'interval', 'backlog', 'resources'))
     local _tags = cjson.decode(tags)
+    local resources = cjson.decode(resources or '[]')
     local score = math.floor(tonumber(self.recurring.score(jid)))
     interval = tonumber(interval)
 
@@ -752,18 +771,19 @@ function QlessQueue:check_recurring(now, count)
     while (score <= now) and (moved < count) do
       local count = redis.call('hincrby', 'ql:r:' .. jid, 'count', 1)
       moved = moved + 1
-      
+
+      local child_jid = jid .. '-' .. count
+
       -- Add this job to the list of jobs tagged with whatever tags were
       -- supplied
       for i, tag in ipairs(_tags) do
-        redis.call('zadd', 'ql:t:' .. tag, now, jid .. '-' .. count)
+        redis.call('zadd', 'ql:t:' .. tag, now, child_jid)
         redis.call('zincrby', 'ql:tags', 1, tag)
       end
       
       -- First, let's save its data
-      local child_jid = jid .. '-' .. count
       redis.call('hmset', QlessJob.ns .. child_jid,
-        'jid'      , jid .. '-' .. count,
+        'jid'      , child_jid,
         'klass'    , klass,
         'data'     , data,
         'priority' , priority,
@@ -774,13 +794,23 @@ function QlessQueue:check_recurring(now, count)
         'queue'    , self.name,
         'retries'  , retries,
         'remaining', retries,
+        'resources', cjson.encode(resources),
         'time'     , string.format("%.20f", score))
-      Qless.job(child_jid):history(score, 'put', {q = self.name})
+
+      local job = Qless.job(child_jid)
+      job:history(score, 'put', {q = self.name})
       
       -- Now, if a delay was provided, and if it's in the future,
       -- then we'll have to schedule it. Otherwise, we're just
       -- going to add it to the work queue.
-      self.work.add(score, priority, jid .. '-' .. count)
+
+      local add_job = true
+      if #resources then
+        add_job = job:acquire_resources(score)
+      end
+      if add_job then
+        self.work.add(score, priority, child_jid)
+      end
       
       score = score + interval
       self.recurring.add(score, jid)
@@ -802,7 +832,9 @@ function QlessQueue:check_scheduled(now, count)
     -- remove them from the scheduled queue
     local priority = tonumber(
       redis.call('hget', QlessJob.ns .. jid, 'priority') or 0)
-    self.work.add(now, priority, jid)
+    if Qless.job(jid):acquire_resources(now) then
+      self.work.add(now, priority, jid)
+    end
     self.scheduled.remove(jid)
 
     -- We should also update them to have the state 'waiting'
@@ -884,6 +916,8 @@ function QlessQueue:invalidate_locks(now, count)
       
       -- This is where we actually have to time out the work
       if remaining < 0 then
+        Qless.job(jid):release_resources(now)
+
         -- Now remove the instance from the schedule, and work queues
         -- for the queue it's in
         self.work.remove(jid)
