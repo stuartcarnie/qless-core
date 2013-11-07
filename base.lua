@@ -29,7 +29,7 @@ QlessRecurringJob.__index = QlessRecurringJob
 
 -- Resource forward declaration
 local QlessResource = {
-    ns = Qless.ns .. 'r:'
+    ns = Qless.ns .. 'rs:'
 }
 QlessResource.__index = QlessResource;
 
