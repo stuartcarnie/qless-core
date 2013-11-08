@@ -440,6 +440,6 @@ function Qless.cancel(...)
     end
   end
   
-  return cjson.encode(cancelled_jids)
+  return cancelled_jids
 end
 
