@@ -355,14 +355,18 @@ function Qless.cancel(...)
     end
   end
 
+  local cancelled_jids = {}
+
   -- If we've made it this far, then we are good to go. We can now just
   -- remove any trace of all these jobs, as they form a dependent clique
   for _, jid in ipairs(arg) do
     -- Find any stage it's associated with and remove its from that stage
-    local state, queue, failure, worker = unpack(redis.call(
-      'hmget', QlessJob.ns .. jid, 'state', 'queue', 'failure', 'worker'))
+    local real_jid, state, queue, failure, worker = unpack(redis.call(
+      'hmget', QlessJob.ns .. jid, 'jid', 'state', 'queue', 'failure', 'worker'))
 
-    if state ~= 'complete' then
+    if state ~= false and state ~= 'complete' then
+      table.insert(cancelled_jids, jid)
+
       -- Send a message out on the appropriate channels
       local encoded = cjson.encode({
         jid    = jid,
@@ -436,6 +440,6 @@ function Qless.cancel(...)
     end
   end
   
-  return arg
+  return cjson.encode(cancelled_jids)
 end
 

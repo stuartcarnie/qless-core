@@ -280,6 +280,14 @@ class TestCancel(TestQless):
         self.lua('cancel', 3, 'jid')
         self.assertEqual(self.lua('get', 4, 'jid'), None)
 
+    def test_returns_cancelled_jids(self):
+        self.lua('put', 0, 'worker', 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0)
+        self.lua('put', 0, 'worker', 'queue', 'jid-2', 'klass', {}, 0, 'retries', 0)
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        res = self.lua('cancel', 3, 'jid-1', 'jid-2', 'jid-3')
+
+        self.assertEqual(res, ['jid-1', 'jid-2'])
+
     def test_cancel_waiting_releases_acquired_resources(self):
         self.lua('resource.set', 0, 'r-1', 1)
         self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0, 'resources', ['r-1'])
