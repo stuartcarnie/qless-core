@@ -4,6 +4,13 @@
 -------------------------------------------------------------------------------
 local QlessAPI = {}
 
+--- Converts an empty string to nil - redis client can't pass nulls
+-- @param value
+--
+local function tonil(value)
+  if (value == '') then return nil else return value end
+end
+
 -- Return json for the job identified by the provided jid. If the job is not
 -- present, then `nil` is returned
 function QlessAPI.get(now, jid)
@@ -25,6 +32,7 @@ end
 
 -- Public access
 QlessAPI['config.get'] = function(now, key)
+  key = tonil(key)
   if not key then
     return cjson.encode(Qless.config.get(key))
   else
@@ -33,11 +41,13 @@ QlessAPI['config.get'] = function(now, key)
 end
 
 QlessAPI['config.set'] = function(now, key, value)
+  key = tonil(key)
   return Qless.config.set(key, value)
 end
 
 -- Unset a configuration option
 QlessAPI['config.unset'] = function(now, key)
+  key = tonil(key)
   return Qless.config.unset(key)
 end
 
@@ -47,6 +57,7 @@ QlessAPI.queues = function(now, queue)
 end
 
 QlessAPI.complete = function(now, jid, worker, queue, data, ...)
+  data = tonil(data)
   return Qless.job(jid):complete(now, worker, queue, data, unpack(arg))
 end
 
@@ -55,6 +66,7 @@ QlessAPI.failed = function(now, group, start, limit)
 end
 
 QlessAPI.fail = function(now, jid, worker, group, message, data)
+  data = tonil(data)
   return Qless.job(jid):fail(now, worker, group, message, data)
 end
 
@@ -71,7 +83,7 @@ QlessAPI.depends = function(now, jid, command, ...)
 end
 
 QlessAPI.heartbeat = function(now, jid, worker, data)
-  if data == '' then data = nil end
+  data = tonil(data)
   return Qless.job(jid):heartbeat(now, worker, data)
 end
 
@@ -135,6 +147,10 @@ QlessAPI.unpause = function(now, ...)
   return QlessQueue.unpause(unpack(arg))
 end
 
+QlessAPI.paused = function(now, queue)
+  return Qless.queue(queue):paused()
+end
+
 QlessAPI.cancel = function(now, ...)
   return Qless.cancel(unpack(arg))
 end
@@ -146,7 +162,7 @@ QlessAPI.timeout = function(now, ...)
 end
 
 QlessAPI.put = function(now, me, queue, jid, klass, data, delay, ...)
-  if data == '' then data = nil end
+  data = tonil(data)
   return Qless.queue(queue):put(now, me, jid, klass, data, delay, unpack(arg))
 end
 
@@ -156,7 +172,7 @@ end
 
 -- Recurring job stuff
 QlessAPI.recur = function(now, queue, jid, klass, data, spec, ...)
-  if data == '' then data = nil end
+  data = tonil(data)
   return Qless.queue(queue):recur(now, jid, klass, data, spec, unpack(arg))
 end
 

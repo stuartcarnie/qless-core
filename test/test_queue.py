@@ -286,9 +286,14 @@ class TestQueue(TestQless):
         self.assertEqual(self.lua('queues', 0, 'queue'), expected)
         self.assertEqual(self.lua('queues', 0), [expected])
 
+        self.assertTrue(self.lua('paused', 0, 'queue'))
+
         # Once unpaused, we should be able to pop jobs off
         self.lua('unpause', 0, 'queue')
         self.assertEqual(len(self.lua('pop', 0, 'queue', 'worker', 100)), 10)
+
+        self.assertFalse(self.lua('paused', 0, 'queue'))
+
 
     def test_advance(self):
         '''When advancing a job to a new queue, queues should know about it'''
