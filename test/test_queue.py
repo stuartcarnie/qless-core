@@ -518,6 +518,44 @@ class TestPut(TestQless):
         res = self.lua('complete', 10, job['jid'], 'worker-2', 'queue', {})
         self.assertEquals(res, 'complete')
 
+    def test_does_replace_when_not_running(self):
+        res = self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 'jid-1')
+
+        res = self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 'jid-1')
+
+    def test_no_replace_when_running_and_not_expired(self):
+        res = self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 'jid-1')
+
+        res = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEqual(res[0]['jid'], 'jid-1')
+
+        res = self.lua('put', 5, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 56)
+
+    def test_default_is_to_replace_existing_job(self):
+        res = self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0)
+        self.assertEqual(res, 'jid-1')
+
+        res = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEqual(res[0]['jid'], 'jid-1')
+
+        res = self.lua('put', 5, None, 'queue', 'jid-1', 'klass', {}, 0)
+        self.assertEqual(res, 'jid-1')
+
+    def test_does_replace_when_running_and_expired(self):
+        res = self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 'jid-1')
+
+        res = self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.assertEqual(res[0]['jid'], 'jid-1')
+
+        res = self.lua('put', 65, None, 'queue', 'jid-1', 'klass', {}, 0, 'replace', 0)
+        self.assertEqual(res, 'jid-1')
+
+
 
 
 

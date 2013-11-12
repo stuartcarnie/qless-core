@@ -58,6 +58,8 @@ function Qless.queue(name)
       else
         return redis.call('zcard', queue:prefix('locks'))
       end
+    end, job_time_left = function(now, jid)
+      return tonumber(redis.call('zscore', queue:prefix('locks'), jid) or 0) - now
     end
   }
 
@@ -430,6 +432,17 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
   local priority, tags, oldqueue, state, failure, retries, oldworker =
     unpack(redis.call('hmget', QlessJob.ns .. jid, 'priority', 'tags',
       'queue', 'state', 'failure', 'retries', 'worker'))
+
+  -- true if empty or anything other than false
+  local replace = assert(tonumber(options['replace'] or 1) ,
+    'Put(): Arg "replace" not a number: ' .. tostring(options['replace']))
+
+  if replace == 0 and state == 'running' then
+    local time_left = self.locks.job_time_left(now, jid)
+    if time_left > 0 then
+      return time_left
+    end
+  end
 
   -- If there are old tags, then we should remove the tags this job has
   if tags then
