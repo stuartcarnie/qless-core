@@ -429,3 +429,90 @@ class TestJobsWithResources(TestQless):
         self.assertRaisesRegexp(redis.ResponseError, r'resource r-1 does not exist',
             self.lua, 'put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1'])
 
+    def test_releases_multiple_resources(self):
+        """Job requires mutliple resources to be claimed"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('resource.set', 0, 'r-2', 1)
+
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1', 'r-2'])
+
+        job = self.lua('pop', 1, 'queue', 'worker-1', 1)
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], ['jid-1'])
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], ['jid-1'])
+        self.assertEqual(res2['pending'], {})
+
+        self.lua('complete', 3, 'jid-1', 'worker-1', 'queue', {})
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], {})
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], {})
+        self.assertEqual(res2['pending'], {})
+
+    def test_releases_pending_with_multiple_resources(self):
+        """Two jobs with shared mtuliple resources behaves as expected"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        self.lua('resource.set', 0, 'r-2', 1)
+        self.lua('resource.set', 0, 'r-3', 1)
+
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'retries', 0, 'resources', ['r-1', 'r-2'])
+        job1 = self.lua('pop', 1, 'queue', 'worker-1', 1)
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], ['jid-1'])
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], ['jid-1'])
+        self.assertEqual(res2['pending'], {})
+
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'retries', 0, 'resources', ['r-2', 'r-3'])
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], ['jid-1'])
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], ['jid-1'])
+        self.assertEqual(res2['pending'], ['jid-2'])
+
+        res3 = self.lua('resource.get', 0, 'r-3')
+        self.assertEqual(res3['locks'], {})
+        self.assertEqual(res3['pending'], {})
+
+        self.lua('complete', 3, 'jid-1', 'worker-1', 'queue', {})
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], {})
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], ['jid-2'])
+        self.assertEqual(res2['pending'], {})
+
+        res3 = self.lua('resource.get', 0, 'r-3')
+        self.assertEqual(res3['locks'], ['jid-2'])
+        self.assertEqual(res3['pending'], {})
+
+        self.lua('pop', 1, 'queue', 'worker-1', 1)
+        self.lua('complete', 3, 'jid-2', 'worker-1', 'queue', {})
+
+        res1 = self.lua('resource.get', 0, 'r-1')
+        self.assertEqual(res1['locks'], {})
+        self.assertEqual(res1['pending'], {})
+
+        res2 = self.lua('resource.get', 0, 'r-2')
+        self.assertEqual(res2['locks'], {})
+        self.assertEqual(res2['pending'], {})
+
+        res3 = self.lua('resource.get', 0, 'r-3')
+        self.assertEqual(res3['locks'], {})
+        self.assertEqual(res3['pending'], {})
+

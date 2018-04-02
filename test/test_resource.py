@@ -48,4 +48,3 @@ class TestResources(TestQless):
 
         self.assertEqual(res['locks'], ['jid-1'])
         self.assertEqual(res['pending'], {})
-

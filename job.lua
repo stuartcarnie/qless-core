@@ -818,11 +818,11 @@ function QlessJob:history(now, what, item)
   end
 end
 
-function QlessJob:release_resources()
+function QlessJob:release_resources(now)
   local resources = redis.call('hget', QlessJob.ns .. self.jid, 'resources')
   resources = cjson.decode(resources or '[]')
   for _, res in ipairs(resources) do
-    Qless.resource(res):release(self.jid)
+    Qless.resource(res):release(now, self.jid)
   end
 end
 

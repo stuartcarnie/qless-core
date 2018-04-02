@@ -26,6 +26,7 @@ submodules that are concatenated together into a `qless.lua` script. These are:
 - `worker.lua` -- manage available workers
 - `api.lua` -- exposing the interfaces that the clients invoke, it's a very
 	thin wrapper around these classes
+- `resource.lua` -- manages resource locking around jobs
 
 In order to build up the `qless.lua` script, we've included a simple `Makefile`
 though all it does is cat these files out in a particular order:
@@ -421,6 +422,11 @@ it progress through all queues:
 
 	C, B, A, C, B, A, C, A, A, A
 
+Job Resource Tags
+-----------------
+You can place one or more string tags on a job under the `resources` attribute.
+Resource keys are declared with a max value.  Qless will lock around these keys
+and will not allow more tags to run globally then what is declared on the resource.
 
 Internal Style Guide
 ====================
