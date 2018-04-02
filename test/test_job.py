@@ -40,6 +40,19 @@ class TestJob(TestQless):
             {'q': 'queue', 'what': 'put', 'when': 98},
             {'q': 'queue', 'what': 'put', 'when': 99}])
 
+class TestRequeue(TestQless):
+    def test_requeue_existing_job(self):
+        '''Requeueing an existing job is identical to `put`'''
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0)
+        self.lua('requeue', 1, 'worker', 'queue-2', 'jid', 'klass', {}, 0)
+        self.assertEqual(self.lua('get', 0, 'jid')['queue'], 'queue-2')
+
+    def test_requeue_cancelled_job(self):
+        '''Requeueing a cancelled (or non-existent) job fails'''
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0)
+        self.lua('cancel', 1, 'jid')
+        self.assertRaisesRegexp(redis.ResponseError, r'does not exist',
+            self.lua, 'requeue', 2, 'worker', 'queue-2', 'jid', 'klass', {}, 0)
 
 class TestComplete(TestQless):
     '''Test how we complete jobs'''
@@ -134,8 +147,9 @@ class TestComplete(TestQless):
             'state': 'complete',
             'tags': {},
             'tracked': False,
-            'resources': {},
-            'worker': u''})
+            'worker': u'',
+            'spawned_from_jid': False,
+            'resources': {}})
 
     def test_advance(self):
         '''Can complete and advance a job in one fell swooop'''
@@ -145,12 +159,27 @@ class TestComplete(TestQless):
         self.assertEqual(
             self.lua('pop', 3, 'foo', 'worker', 10)[0]['jid'], 'jid')
 
+    def test_advance_empty_array_mangle(self):
+        '''Does not mangle empty arrays in job data when advancing'''
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', '[]', 0)
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        self.lua('complete', 2, 'jid', 'worker', 'queue', '[]', 'next', 'foo')
+        self.assertEqual(
+            self.lua('pop', 3, 'foo', 'worker', 10)[0]['data'], '[]')
+
     def test_wrong_worker(self):
         '''Only the right worker can complete it'''
         self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0)
         self.lua('pop', 1, 'queue', 'worker', 10)
         self.assertRaisesRegexp(redis.ResponseError, r'another worker',
             self.lua, 'complete', 2, 'jid', 'another', 'queue', {})
+
+    def test_wrong_queue(self):
+        '''A job can only be completed in the queue it's in'''
+        self.lua('put', 0, 'worker', 'queue', 'jid', 'klass', {}, 0)
+        self.lua('pop', 1, 'queue', 'worker', 10)
+        self.assertRaisesRegexp(redis.ResponseError, r'another queue',
+            self.lua, 'complete', 2, 'jid', 'worker', 'another-queue', {})
 
     def test_expire_complete_count(self):
         '''Jobs expire after a k complete jobs'''
@@ -258,7 +287,7 @@ class TestCancel(TestQless):
         self.lua('pop', 1, 'queue', 'worker', 10)
         self.lua('heartbeat', 2, 'jid', 'worker', {})
         self.lua('cancel', 3, 'jid')
-        self.assertRaisesRegexp(redis.ResponseError, r'Job does not exist',
+        self.assertRaisesRegexp(redis.ResponseError, r'Job jid does not exist',
             self.lua, 'heartbeat', 4, 'jid', 'worker', {})
 
     def test_cancel_retries(self):

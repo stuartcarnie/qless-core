@@ -81,14 +81,14 @@ end
 -- If no group is provided, this returns a JSON blob of the counts of the
 -- various groups of failures known. If a group is provided, it will report up
 -- to `limit` from `start` of the jobs affected by that issue.
--- 
+--
 --  # If no group, then...
 --  {
 --      'group1': 1,
 --      'group2': 5,
 --      ...
 --  }
---  
+--
 --  # If a group is provided, then...
 --  {
 --      'total': 20,
@@ -134,9 +134,9 @@ end
 -------------------------------------------------------------------------------
 -- Return all the job ids currently considered to be in the provided state
 -- in a particular queue. The response is a list of job ids:
--- 
+--
 --  [
---      jid1, 
+--      jid1,
 --      jid2,
 --      ...
 --  ]
@@ -167,7 +167,7 @@ function Qless.jobs(now, state, ...)
     elseif state == 'depends' then
       return queue.depends.peek(now, offset, count)
     elseif state == 'recurring' then
-      return queue.recurring.peek(math.huge, offset, count)
+      return queue.recurring.peek('+inf', offset, count)
     else
       error('Jobs(): Unknown type "' .. state .. '"')
     end
@@ -182,7 +182,7 @@ end
 -- associated with that id, and 'untrack' stops tracking it. In this context,
 -- tracking is nothing more than saving the job to a list of jobs that are
 -- considered special.
--- 
+--
 --  {
 --      'jobs': [
 --          {
@@ -267,20 +267,19 @@ function Qless.tag(now, command, ...)
       tags = cjson.decode(tags)
       local _tags = {}
       for i,v in ipairs(tags) do _tags[v] = true end
-    
+
       -- Otherwise, add the job to the sorted set with that tags
       for i=2,#arg do
         local tag = arg[i]
-        if _tags[tag] == nil then
+        if _tags[tag] == nil or _tags[tag] == false then
           _tags[tag] = true
           table.insert(tags, tag)
         end
         redis.call('zadd', 'ql:t:' .. tag, now, jid)
         redis.call('zincrby', 'ql:tags', 1, tag)
       end
-    
-      tags = cjson.encode(tags)
-      redis.call('hset', QlessJob.ns .. jid, 'tags', tags)
+
+      redis.call('hset', QlessJob.ns .. jid, 'tags', cjson.encode(tags))
       return tags
     else
       error('Tag(): Job ' .. jid .. ' does not exist')
@@ -294,7 +293,7 @@ function Qless.tag(now, command, ...)
       tags = cjson.decode(tags)
       local _tags = {}
       for i,v in ipairs(tags) do _tags[v] = true end
-    
+
       -- Otherwise, add the job to the sorted set with that tags
       for i=2,#arg do
         local tag = arg[i]
@@ -302,12 +301,11 @@ function Qless.tag(now, command, ...)
         redis.call('zrem', 'ql:t:' .. tag, jid)
         redis.call('zincrby', 'ql:tags', -1, tag)
       end
-    
+
       local results = {}
       for i,tag in ipairs(tags) do if _tags[tag] then table.insert(results, tag) end end
-    
-      tags = cjson.encode(results)
-      redis.call('hset', QlessJob.ns .. jid, 'tags', tags)
+
+      redis.call('hset', QlessJob.ns .. jid, 'tags', cjson.encode(results))
       return results
     else
       error('Tag(): Job ' .. jid .. ' does not exist')
@@ -348,7 +346,7 @@ function Qless.cancel(...)
   -- make sure that this operation will be ok
   for i, jid in ipairs(arg) do
     for j, dep in ipairs(dependents[jid]) do
-      if dependents[dep] == nil then
+      if dependents[dep] == nil or dependents[dep] == false then
         error('Cancel(): ' .. jid .. ' is a dependency of ' .. dep ..
            ' but is not mentioned to be canceled')
       end
@@ -439,7 +437,7 @@ function Qless.cancel(...)
       redis.call('del', QlessJob.ns .. jid .. '-history')
     end
   end
-  
+
   return cancelled_jids
 end
 
