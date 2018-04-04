@@ -45,8 +45,9 @@ class TestFail(TestQless):
             'state': 'failed',
             'tags': {},
             'tracked': False,
-            'resources': {},
-            'worker': u''})
+            'worker': u'',
+            'spawned_from_jid': False,
+            'resources': {}})
 
     def test_put(self):
         '''Can put a job that has been failed'''

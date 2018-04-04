@@ -4,13 +4,6 @@
 -------------------------------------------------------------------------------
 local QlessAPI = {}
 
---- Converts an empty string to nil - redis client can't pass nulls
--- @param value
---
-local function tonil(value)
-  if (value == '') then return nil else return value end
-end
-
 -- Return json for the job identified by the provided jid. If the job is not
 -- present, then `nil` is returned
 function QlessAPI.get(now, jid)
@@ -32,7 +25,6 @@ end
 
 -- Public access
 QlessAPI['config.get'] = function(now, key)
-  key = tonil(key)
   if not key then
     return cjson.encode(Qless.config.get(key))
   else
@@ -41,13 +33,11 @@ QlessAPI['config.get'] = function(now, key)
 end
 
 QlessAPI['config.set'] = function(now, key, value)
-  key = tonil(key)
   return Qless.config.set(key, value)
 end
 
 -- Unset a configuration option
 QlessAPI['config.unset'] = function(now, key)
-  key = tonil(key)
   return Qless.config.unset(key)
 end
 
@@ -57,7 +47,6 @@ QlessAPI.queues = function(now, queue)
 end
 
 QlessAPI.complete = function(now, jid, worker, queue, data, ...)
-  data = tonil(data)
   return Qless.job(jid):complete(now, worker, queue, data, unpack(arg))
 end
 
@@ -66,7 +55,6 @@ QlessAPI.failed = function(now, group, start, limit)
 end
 
 QlessAPI.fail = function(now, jid, worker, group, message, data)
-  data = tonil(data)
   return Qless.job(jid):fail(now, worker, group, message, data)
 end
 
@@ -83,7 +71,6 @@ QlessAPI.depends = function(now, jid, command, ...)
 end
 
 QlessAPI.heartbeat = function(now, jid, worker, data)
-  data = tonil(data)
   return Qless.job(jid):heartbeat(now, worker, data)
 end
 
@@ -152,7 +139,7 @@ QlessAPI.paused = function(now, queue)
 end
 
 QlessAPI.cancel = function(now, ...)
-  return Qless.cancel(unpack(arg))
+  return Qless.cancel(now, unpack(arg))
 end
 
 QlessAPI.timeout = function(now, ...)
@@ -162,8 +149,13 @@ QlessAPI.timeout = function(now, ...)
 end
 
 QlessAPI.put = function(now, me, queue, jid, klass, data, delay, ...)
-  data = tonil(data)
   return Qless.queue(queue):put(now, me, jid, klass, data, delay, unpack(arg))
+end
+
+QlessAPI.requeue = function(now, me, queue, jid, ...)
+  local job = Qless.job(jid)
+  assert(job:exists(), 'Requeue(): Job ' .. jid .. ' does not exist')
+  return QlessAPI.put(now, me, queue, jid, unpack(arg))
 end
 
 QlessAPI.unfail = function(now, queue, group, count)
@@ -172,7 +164,6 @@ end
 
 -- Recurring job stuff
 QlessAPI.recur = function(now, queue, jid, klass, data, spec, ...)
-  data = tonil(data)
   return Qless.queue(queue):recur(now, jid, klass, data, spec, unpack(arg))
 end
 
@@ -231,6 +222,10 @@ end
 
 QlessAPI['resource.locks'] = function(now, rid)
   return Qless.resource(rid):locks()
+end
+
+QlessAPI['resources'] = function(now, rid)
+  return cjson.encode(QlessResource:counts(now, rid))
 end
 
 -------------------------------------------------------------------------------

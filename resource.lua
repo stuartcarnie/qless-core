@@ -27,15 +27,68 @@ function QlessResource:data(...)
   return data
 end
 
+---
+-- Stats oriented call to view the counts of a single resource with the
+-- provided name or all resource stats.  If a single or all resource are
+-- not found, it returns nil.
+-- @param now
+-- @param name
+--
+function QlessResource:counts(now, rid)
+  if rid then
+    local resource = redis.call(
+      'hmget', QlessResource.ns .. rid, 'rid', 'max')
+
+    -- Return nil if we haven't found it
+    if not resource[1] then
+      return nil
+    end
+
+    local pending = redis.call('zrevrange', QlessResource.ns .. rid .. '-' .. 'pending', 0, -1)
+    local pcount = 0
+    for _, _ in pairs(pending) do
+      pcount = pcount + 1
+    end
+
+    local locks = redis.call('smembers', QlessResource.ns .. rid .. '-' .. 'locks')
+    local lcount = 0
+    for _, _ in pairs(locks) do
+      lcount = lcount + 1
+    end
+
+    return {
+      rid          = resource[1],
+      max          = tonumber(resource[2] or 0),
+      pending      = tonumber(pcount or 0),
+      locks        = tonumber(lcount or 0)
+    }
+  else
+    local resources = redis.call('smembers', 'ql:resources')
+    local response = {}
+    for _, rname in ipairs(resources) do
+      local c = QlessResource:counts(now, rname)
+      response[rname] = {
+        max        = c.max,
+        pending    = c.pending,
+        locks      = c.locks
+      }
+    end
+
+    return response
+  end
+end
+
 function QlessResource:set(max)
   local max = assert(tonumber(max), 'Set(): Arg "max" not a number: ' .. tostring(max))
 
+  redis.call('sadd', 'ql:resources', self.rid)
   redis.call('hmset', QlessResource.ns .. self.rid, 'rid', self.rid, 'max', max);
 
   return self.rid
 end
 
 function QlessResource:unset()
+  redis.call('srem', 'ql:resources', self.rid)
   return redis.call('del', QlessResource.ns .. self.rid);
 end
 
@@ -53,6 +106,11 @@ function QlessResource:acquire(now, priority, jid)
   assert(data, 'Acquire(): resource ' .. self.rid .. ' does not exist')
   assert(type(jid) ~= 'table', 'Acquire(): invalid jid')
 
+  -- Don't allow multiple locks on same aquire
+  if redis.call('sismember', self:prefix('locks'), jid) == 1 then
+    return true
+  end
+
   local remaining = data['max'] - redis.pcall('scard', keyLocks)
 
   if remaining > 0 then
@@ -62,7 +120,8 @@ function QlessResource:acquire(now, priority, jid)
     return true
   end
 
-  if redis.call('sismember', self:prefix('locks'), jid) == 0 then
+  local pending = redis.call('zscore', self:prefix('pending'), jid)
+  if pending == nil or pending == false then
     redis.call('zadd', self:prefix('pending'), priority - (now / 10000000000), jid)
   end
 
@@ -73,7 +132,7 @@ end
 -- @param now
 -- @param jid
 --
-function QlessResource:release(jid)
+function QlessResource:release(now, jid)
   local keyLocks = self:prefix('locks')
   local keyPending = self:prefix('pending')
 
@@ -88,13 +147,11 @@ function QlessResource:release(jid)
   local newJid = jids[1]
   local score = jids[2]
 
-  redis.call('sadd', keyLocks, newJid)
-  redis.call('zrem', keyPending, newJid)
-
-  local data = Qless.job(newJid):data()
-  local queue = Qless.queue(data['queue'])
-
-  queue.work.add(score, 0, newJid)
+  -- multiple resource validation
+  if Qless.job(newJid):acquire_resources(now) then
+    local data = Qless.job(newJid):data()
+    Qless.queue(data['queue']).work.add(score, 0, newJid)
+  end
 
   return newJid
 end

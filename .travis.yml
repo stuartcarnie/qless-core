@@ -1,10 +1,13 @@
-services:
-  - redis-server
+sudo: false
 language: python
 python:
-  - 2.6
   - 2.7
-  - pypy
-install: 
-  - pip install redis --use-mirrors
-script:  make test
+install:
+  - make redis
+  - pip install redis
+env:
+  - REDIS_VERSION=2.8.24
+  - REDIS_VERSION=3.0.7
+  - REDIS_VERSION=3.2.11
+  - REDIS_VERSION=4.0.6
+script: make test
