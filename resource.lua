@@ -27,15 +27,68 @@ function QlessResource:data(...)
   return data
 end
 
+---
+-- Stats oriented call to view the counts of a single resource with the
+-- provided name or all resource stats.  If a single or all resource are
+-- not found, it returns nil.
+-- @param now
+-- @param name
+--
+function QlessResource:counts(now, rid)
+  if rid then
+    local resource = redis.call(
+      'hmget', QlessResource.ns .. rid, 'rid', 'max')
+
+    -- Return nil if we haven't found it
+    if not resource[1] then
+      return nil
+    end
+
+    local pending = redis.call('zrevrange', QlessResource.ns .. rid .. '-' .. 'pending', 0, -1)
+    local pcount = 0
+    for _, _ in pairs(pending) do
+      pcount = pcount + 1
+    end
+
+    local locks = redis.call('smembers', QlessResource.ns .. rid .. '-' .. 'locks')
+    local lcount = 0
+    for _, _ in pairs(locks) do
+      lcount = lcount + 1
+    end
+
+    return {
+      rid          = resource[1],
+      max          = tonumber(resource[2] or 0),
+      pending      = tonumber(pcount or 0),
+      locks        = tonumber(lcount or 0)
+    }
+  else
+    local resources = redis.call('smembers', 'ql:resources')
+    local response = {}
+    for _, rname in ipairs(resources) do
+      local c = QlessResource:counts(now, rname)
+      response[rname] = {
+        max        = c.max,
+        pending    = c.pending,
+        locks      = c.locks
+      }
+    end
+
+    return response
+  end
+end
+
 function QlessResource:set(max)
   local max = assert(tonumber(max), 'Set(): Arg "max" not a number: ' .. tostring(max))
 
+  redis.call('sadd', 'ql:resources', self.rid)
   redis.call('hmset', QlessResource.ns .. self.rid, 'rid', self.rid, 'max', max);
 
   return self.rid
 end
 
 function QlessResource:unset()
+  redis.call('srem', 'ql:resources', self.rid)
   return redis.call('del', QlessResource.ns .. self.rid);
 end
 

@@ -224,6 +224,10 @@ QlessAPI['resource.locks'] = function(now, rid)
   return Qless.resource(rid):locks()
 end
 
+QlessAPI['resources'] = function(now, rid)
+  return cjson.encode(QlessResource:counts(now, rid))
+end
+
 -------------------------------------------------------------------------------
 -- Function lookup
 -------------------------------------------------------------------------------

@@ -134,3 +134,93 @@ class TestResources(TestQless):
         res = self.lua('resource.get', 0, 'r-1')
         self.assertEqual(res['locks'], {})
         self.assertEqual(res['pending'], ['jid-3', 'jid-2'])
+
+    def test_handles_specific_resource_counts(self):
+        """Stats call for a speficied resource"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        res = self.lua('resources', 0, 'r-1')
+        self.assertEqual(res, {
+            'rid': 'r-1',
+            'max': 1,
+            'pending': 0,
+            'locks': 0
+        })
+
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+        res = self.lua('resources', 0, 'r-1')
+        self.assertEqual(res, {
+            'rid': 'r-1',
+            'max': 1,
+            'pending': 1,
+            'locks': 1
+        })
+
+        self.lua('pop', 10, 'queue', 'worker-1', 10)
+        self.lua('complete', 3, 'jid-1', 'worker-1', 'queue', {})
+
+        res = self.lua('resources', 0, 'r-1')
+        self.assertEqual(res, {
+            'rid': 'r-1',
+            'max': 1,
+            'pending': 0,
+            'locks': 1
+        })
+
+        self.lua('pop', 10, 'queue', 'worker-1', 10)
+        self.lua('complete', 3, 'jid-2', 'worker-1', 'queue', {})
+
+        res = self.lua('resources', 0, 'r-1')
+        self.assertEqual(res, {
+            'rid': 'r-1',
+            'max': 1,
+            'pending': 0,
+            'locks': 0
+        })
+
+        self.lua('resource.unset', 0, 'r-1')
+        res = self.lua('resources', 0, 'r-1')
+        self.assertEqual(res, None)
+
+    def test_handles_non_specific_resource_counts(self):
+        """Resources are mapped via a set"""
+        self.lua('resource.set', 0, 'r-1', 1)
+        res = self.lua('resources', 0)
+        self.assertEqual(res, {
+            'r-1': {
+                'max': 1,
+                'pending': 0,
+                'locks': 0
+            }
+        })
+
+        self.lua('resource.set', 0, 'r-2', 1)
+        self.lua('put', 0, None, 'queue', 'jid-1', 'klass', {}, 0, 'resources', ['r-1'])
+        self.lua('put', 0, None, 'queue', 'jid-2', 'klass', {}, 0, 'resources', ['r-1'])
+        res = self.lua('resources', 0)
+        self.assertEqual(res, {
+            'r-2': {
+                'max': 1,
+                'pending': 0,
+                'locks': 0
+            },
+            'r-1': {
+                'max': 1,
+                'pending': 1,
+                'locks': 1
+            }
+        })
+
+        self.lua('resource.unset', 0, 'r-1', 1)
+        res = self.lua('resources', 0)
+        self.assertEqual(res, {
+            'r-2': {
+                'max': 1,
+                'pending': 0,
+                'locks': 0
+            }
+        })
+
+        self.lua('resource.unset', 0, 'r-2', 1)
+        res = self.lua('resources', 0)
+        self.assertEqual(res, {})
